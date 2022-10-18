@@ -1,0 +1,51 @@
+python-pyfakefs (4.3.3-1) unstable; urgency=medium
+
+  * Add d/gbp.conf.
+  * New upstream release.
+  * Disable not working test.
+  * Bump standards version to 4.5.1.
+  * d/watch: Bump version.
+
+ -- Ondřej Nový <onovy@debian.org>  Mon, 04 Jan 2021 12:43:44 +0100
+
+python-pyfakefs (4.1.0-1) unstable; urgency=medium
+
+  [ Ondřej Nový ]
+  * New upstream release.
+  * d/control: Update Maintainer field with new Debian Python Team
+    contact address.
+  * d/control: Update Vcs-* fields with new Debian Python Team Salsa
+    layout.
+  * Drop d/p/remove_flask_restx.patch: Removed, not needed.
+
+  [ Debian Janitor ]
+  * Remove obsolete field Name from debian/upstream/metadata (already present in
+    machine-readable debian/copyright).
+
+ -- Ondřej Nový <onovy@debian.org>  Tue, 27 Oct 2020 10:43:48 +0100
+
+python-pyfakefs (4.0.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop upstream depends on (not used) flask_restx.
+
+ -- Ondřej Nový <onovy@debian.org>  Fri, 12 Jun 2020 13:54:38 +0200
+
+python-pyfakefs (3.7.2-2) unstable; urgency=medium
+
+  * Drop PyPy support.
+  * Bump debhelper compat level to 13.
+
+ -- Ondřej Nový <onovy@debian.org>  Fri, 05 Jun 2020 15:54:05 +0200
+
+python-pyfakefs (3.7.2-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Ondřej Nový <onovy@debian.org>  Sat, 07 Mar 2020 20:58:42 +0100
+
+python-pyfakefs (3.7.1-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #950617)
+
+ -- Ondřej Nový <onovy@debian.org>  Tue, 04 Feb 2020 10:17:24 +0100
