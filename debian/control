@@ -6,14 +6,16 @@ Uploaders:
  Ondřej Nový <onovy@debian.org>,
 Build-Depends:
  debhelper-compat (= 13),
- dh-python,
+ dh-sequence-python3,
+ pybuild-plugin-pyproject,
  python3-all,
  python3-setuptools,
-Standards-Version: 4.5.1
+ python3-pytest <!nocheck>
+Standards-Version: 4.6.2
 Vcs-Browser: https://salsa.debian.org/python-team/packages/python-pyfakefs
 Vcs-Git: https://salsa.debian.org/python-team/packages/python-pyfakefs.git
 Homepage: http://pyfakefs.org/
-Testsuite: autopkgtest-pkg-python
+Testsuite: autopkgtest-pkg-pybuild
 Rules-Requires-Root: no
 
 Package: python3-pyfakefs

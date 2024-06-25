@@ -9,14 +9,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 
-"""
-Example module that is used for a regression test where a module with
-a name ending with "io" was skipped from patching (see #569).
-"""
+import pytest
 
 
-def file_contents(path):
-    """Return the contents of the given path as byte array."""
-    with open(path, "rb") as f:
-        return f.read()
+@pytest.fixture(scope="module", autouse=True)
+def use_fs(fs_module):
+    fs_module.create_file(os.path.join("foo", "bar"))
+    yield fs_module
+
+
+@pytest.mark.usefixtures("fs")
+def test_fs_uses_fs_module1():
+    # check that `fs` uses the same filesystem as `fs_module`
+    assert os.path.exists(os.path.join("foo", "bar"))
+
+
+def test_fs_uses_fs_module2(fs):
+    # check that testing was not stopped by the first test
+    assert os.path.exists(os.path.join("foo", "bar"))

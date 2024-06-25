@@ -1,3 +1,55 @@
+python-pyfakefs (5.3.2-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream version 5.3.2 (Closes: #1056524, #1028582).
+  * Control: set testsuite to autopkgtest-pkg-pybuild.
+  * Control, rules: switch from dh-python to dh-sequence-python3.
+  * Control: add build-dep on pybuild-plugin-pyproject.
+  * Control: bump Standards-Version to 4.6.2 (from 4.6.1; no further
+    changes).
+  * Add d/pybuild.testfiles to support running the testsuite in an
+    autopkgtest context.
+
+ -- Jeroen Ploemen <jcfp@debian.org>  Wed, 06 Dec 2023 12:40:25 +0000
+
+python-pyfakefs (4.6.3-3) unstable; urgency=medium
+
+  * Team upload.
+  * add pytest to B-D to force tests to run via something other
+    than the deprecated "python3 setup.py test" command
+
+ -- Mohammed Bilal <mdbilal@disroot.org>  Sun, 04 Dec 2022 08:09:59 +0000
+
+python-pyfakefs (4.6.3-2) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Set upstream metadata fields: Repository-Browse.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sun, 16 Oct 2022 20:56:49 +0100
+
+python-pyfakefs (4.6.3-1) unstable; urgency=medium
+
+  [ Ileana Dumitrescu ]
+  * Team upload.
+  * New upstream release, fixing FTBFS (Closes: #1017210)
+  * d/copyright: Update debian copyright year to 2022.
+  * d/control: Bump standards version to 4.6.1.
+
+  [ Jeroen Ploemen ]
+  * Copyright: bump upstream copyright year.
+
+ -- Ileana Dumitrescu <ileanadumitrescu95@gmail.com>  Mon, 12 Sep 2022 20:03:40 +0000
+
+python-pyfakefs (4.5.4-1) unstable; urgency=medium
+
+  * Team upload
+
+  [ Alexandre Ghiti ]
+  * New upstream release, fixing FTBFS (Closes: #1002350)
+  * d/patches: Remove disable_test.patch that is now useless.
+
+ -- Graham Inggs <ginggs@debian.org>  Fri, 11 Feb 2022 15:42:25 +0000
+
 python-pyfakefs (4.3.3-1) unstable; urgency=medium
 
   * Add d/gbp.conf.

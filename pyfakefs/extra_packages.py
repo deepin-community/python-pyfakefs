@@ -11,18 +11,13 @@
 # limitations under the License.
 
 """Imports external packages that replace or emulate internal packages.
-If the external module is not present, the build-in module is imported.
+If the external module is not present, the built-in module is imported.
 """
 
 try:
     import pathlib2
-
-    pathlib = pathlib2
 except ImportError:
     pathlib2 = None
-    import pathlib
-
-    pathlib = pathlib
 
 try:
     import scandir
