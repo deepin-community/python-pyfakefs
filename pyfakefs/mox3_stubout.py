@@ -30,16 +30,16 @@ import inspect
 class StubOutForTesting:
     """Sample Usage:
 
-       You want os.path.exists() to always return true during testing.
+    You want os.path.exists() to always return true during testing.
 
-       stubs = StubOutForTesting()
-       stubs.Set(os.path, 'exists', lambda x: 1)
-           ...
-       stubs.UnsetAll()
+    stubs = StubOutForTesting()
+    stubs.Set(os.path, 'exists', lambda x: 1)
+        ...
+    stubs.UnsetAll()
 
-       The above changes os.path.exists into a lambda that returns 1.    Once
-       the ... part of the code finishes, the UnsetAll() looks up the old value
-       of os.path.exists and restores it.
+    The above changes os.path.exists into a lambda that returns 1.    Once
+    the ... part of the code finishes, the UnsetAll() looks up the old value
+    of os.path.exists and restores it.
 
     """
 
@@ -61,21 +61,20 @@ class StubOutForTesting:
         This method supports the case where attr_name is a staticmethod or a
         classmethod of obj.
 
-        Notes:
-          - If obj is an instance, then it is its class that will actually be
-            stubbed. Note that the method Set() does not do that: if obj is
-            an instance, it (and not its class) will be stubbed.
-          - The stubbing is using the builtin getattr and setattr. So, the
-            __get__ and __set__ will be called when stubbing (TODO: A better
-            idea would probably be to manipulate obj.__dict__ instead of
-            getattr() and setattr()).
+        If obj is an instance, then it is its class that will actually be
+        stubbed. Note that the method Set() does not do that: if obj is an
+        instance, it (and not its class) will be stubbed.
 
         Raises AttributeError if the attribute cannot be found.
         """
-        if (inspect.ismodule(obj) or
-                (not inspect.isclass(obj) and attr_name in obj.__dict__)):
+        if inspect.ismodule(obj) or (
+            not inspect.isclass(obj) and attr_name in obj.__dict__
+        ):
             orig_obj = obj
-            orig_attr = getattr(obj, attr_name)
+            if attr_name in obj.__dict__:
+                orig_attr = obj.__dict__[attr_name]
+            else:
+                orig_attr = None
 
         else:
             if not inspect.isclass(obj):
@@ -90,22 +89,15 @@ class StubOutForTesting:
             for cls in mro:
                 try:
                     orig_obj = cls
-                    orig_attr = getattr(obj, attr_name)
-                except AttributeError:
+                    orig_attr = obj.__dict__[attr_name]
+                except KeyError:
                     continue
 
         if orig_attr is None:
             raise AttributeError("Attribute not found.")
 
-        # Calling getattr() on a staticmethod transforms it to a 'normal'
-        # function. We need to ensure that we put it back as a staticmethod.
-        old_attribute = obj.__dict__.get(attr_name)
-        if (old_attribute is not None
-                and isinstance(old_attribute, staticmethod)):
-            orig_attr = staticmethod(orig_attr)
-
         self.stubs.append((orig_obj, attr_name, orig_attr))
-        setattr(orig_obj, attr_name, new_attr)
+        orig_obj.__dict__[attr_name] = new_attr
 
     def smart_unset_all(self):
         """Reverses all the SmartSet() calls.
@@ -116,8 +108,8 @@ class StubOutForTesting:
         """
         self.stubs.reverse()
 
-        for args in self.stubs:
-            setattr(*args)
+        for obj, attr_name, old_attr in self.stubs:
+            obj.__dict__[attr_name] = old_attr
 
         self.stubs = []
 
@@ -143,7 +135,7 @@ class StubOutForTesting:
                 old_child = classmethod(old_child.__func__)
 
         self.cache.append((parent, old_child, child_name))
-        setattr(parent, child_name, new_child)
+        parent.__dict__[child_name] = new_child
 
     def unset_all(self):
         """Reverses all the Set() calls.
@@ -157,6 +149,6 @@ class StubOutForTesting:
         # undone)
         self.cache.reverse()
 
-        for (parent, old_child, child_name) in self.cache:
-            setattr(parent, child_name, old_child)
+        for parent, old_child, child_name in self.cache:
+            parent.__dict__[child_name] = old_child
         self.cache = []
