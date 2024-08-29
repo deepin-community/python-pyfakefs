@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: pyfakefs
-Version: 5.3.2
+Version: 5.6.0
 Summary: pyfakefs implements a fake file system that mocks the Python file system modules.
 Home-page: https://github.com/pytest-dev/pyfakefs
 Author: Google
@@ -156,7 +156,7 @@ for more information.
 pyfakefs.py was initially developed at Google by Mike Bland as a modest fake
 implementation of core Python modules.  It was introduced to all of Google
 in September 2006. Since then, it has been enhanced to extend its
-functionality and usefulness.  At last count, pyfakefs was used in over 2,000
+functionality and usefulness.  At last count, pyfakefs was used in over 20,000
 Python tests at Google.
 
 Google released pyfakefs to the public in 2011 as Google Code project

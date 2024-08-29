@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A fake open() function replacement. See ``fake_filesystem`` for usage.
-"""
+"""A fake open() function replacement. See ``fake_filesystem`` for usage."""
+
 import errno
+import io
 import os
 import sys
-from collections import namedtuple
+import traceback
 from stat import (
     S_ISDIR,
 )
@@ -29,6 +30,9 @@ from typing import (
     cast,
     AnyStr,
     TYPE_CHECKING,
+    Callable,
+    IO,
+    List,
 )
 
 from pyfakefs import helpers
@@ -43,16 +47,15 @@ from pyfakefs.helpers import (
     is_root,
     PERM_READ,
     PERM_WRITE,
+    _OpenModes,
 )
 
 if TYPE_CHECKING:
     from pyfakefs.fake_filesystem import FakeFilesystem
 
 
-_OpenModes = namedtuple(
-    "_OpenModes",
-    "must_exist can_read can_write truncate append must_not_exist",
-)
+# Work around pyupgrade auto-rewriting `io.open()` to `open()`.
+io_open = io.open
 
 _OPEN_MODE_MAP = {
     # mode name:(file must exist, can read, can write,
@@ -66,6 +69,109 @@ _OPEN_MODE_MAP = {
     "x": (False, False, True, False, False, True),
     "x+": (False, True, True, False, False, True),
 }
+
+real_call_line_no = None
+
+
+def _real_call_line_no():
+    global real_call_line_no
+    if real_call_line_no is None:
+        fake_io_source = os.path.join(os.path.dirname(__file__), "fake_io.py")
+        for i, line in enumerate(io_open(fake_io_source)):
+            if "return self._io_module.open_code(path)" in line:
+                real_call_line_no = i + 1
+                break
+    return real_call_line_no
+
+
+def fake_open(
+    filesystem: "FakeFilesystem",
+    skip_names: List[str],
+    file: Union[AnyStr, int],
+    mode: str = "r",
+    buffering: int = -1,
+    encoding: Optional[str] = None,
+    errors: Optional[str] = None,
+    newline: Optional[str] = None,
+    closefd: bool = True,
+    opener: Optional[Callable] = None,
+) -> Union[AnyFileWrapper, IO[Any]]:
+    """Redirect the call to FakeFileOpen.
+    See FakeFileOpen.call() for description.
+    """
+    # since Python 3.13, we can run into a recursion in some instances here:
+    # traceback calls linecache.update_cache, which loads 'os' dynamically,
+    # which will be patched by the dynamic patcher and ends up here again;
+    # for these instances, we use a shortcut check here
+    if (
+        isinstance(file, str)
+        and file.endswith(("fake_open.py", "fake_io.py"))
+        and os.path.split(os.path.dirname(file))[1] == "pyfakefs"
+    ):
+        return io_open(  # pytype: disable=wrong-arg-count
+            file,
+            mode,
+            buffering,
+            encoding,
+            errors,
+            newline,
+            closefd,
+            opener,
+        )
+
+    # workaround for built-in open called from skipped modules (see #552)
+    # as open is not imported explicitly, we cannot patch it for
+    # specific modules; instead we check if the caller is a skipped
+    # module (should work in most cases)
+    stack = traceback.extract_stack(limit=3)
+
+    # handle the case that we try to call the original `open_code`
+    # and get here instead (since Python 3.12)
+    # TODO: use a more generic approach (see other PR #1025)
+    if sys.version_info >= (3, 13):
+        # TODO: check if stacktrace line is still not filled in final version
+        from_open_code = (
+            stack[0].name == "open_code" and stack[0].lineno == _real_call_line_no()
+        )
+    elif sys.version_info >= (3, 12):
+        from_open_code = (
+            stack[0].name == "open_code"
+            and stack[0].line == "return self._io_module.open_code(path)"
+        )
+    else:
+        from_open_code = False
+
+    module_name = os.path.splitext(stack[0].filename)[0]
+    module_name = module_name.replace(os.sep, ".")
+    if sys.version_info >= (3, 13) and module_name.endswith(
+        ("pathlib._abc", "pathlib._local")
+    ):
+        stack = traceback.extract_stack(limit=6)
+        frame = 2
+        # in Python 3.13, pathlib is implemented in 2 sub-modules that may call
+        # each other, so we have to look further in the stack
+        while frame >= 0 and module_name.endswith(("pathlib._abc", "pathlib._local")):
+            module_name = os.path.splitext(stack[frame].filename)[0]
+            module_name = module_name.replace(os.sep, ".")
+            frame -= 1
+
+    if from_open_code or any(
+        [module_name == sn or module_name.endswith("." + sn) for sn in skip_names]
+    ):
+        return io_open(  # pytype: disable=wrong-arg-count
+            file,
+            mode,
+            buffering,
+            encoding,
+            errors,
+            newline,
+            closefd,
+            opener,
+        )
+    fake_file_open = FakeFileOpen(filesystem)
+    return fake_file_open(
+        file, mode, buffering, encoding, errors, newline, closefd, opener
+    )
 
 
 class FakeFileOpen:
@@ -148,16 +254,22 @@ class FakeFileOpen:
             raise ValueError("binary mode doesn't take an encoding argument")
 
         newline, open_modes = self._handle_file_mode(mode, newline, open_modes)
+        opened_as_fd = isinstance(file_, int)
 
         # the pathlib opener is defined in a Path instance that may not be
         # patched under some circumstances; as it just calls standard open(),
         # we may ignore it, as it would not change the behavior
-        if opener is not None and opener.__module__ != "pathlib":
+        if opener is not None and opener.__module__ not in (
+            "pathlib",
+            "pathlib._local",
+        ):
             # opener shall return a file descriptor, which will be handled
             # here as if directly passed
             file_ = opener(file_, self._open_flags_from_open_modes(open_modes))
 
-        file_object, file_path, filedes, real_path = self._handle_file_arg(file_)
+        file_object, file_path, filedes, real_path, can_write = self._handle_file_arg(
+            file_
+        )
         if file_object is None and file_path is None:
             # file must be a fake pipe wrapper, find it...
             if (
@@ -176,7 +288,7 @@ class FakeFileOpen:
                 existing_wrapper.can_write,
                 mode,
             )
-            file_des = self.filesystem._add_open_file(wrapper)
+            file_des = self.filesystem.add_open_file(wrapper)
             wrapper.filedes = file_des
             return wrapper
 
@@ -197,7 +309,11 @@ class FakeFileOpen:
 
         assert real_path is not None
         file_object = self._init_file_object(
-            file_object, file_path, open_modes, real_path
+            file_object,
+            file_path,
+            open_modes,
+            real_path,
+            check_file_permission=not opened_as_fd,
         )
 
         if S_ISDIR(file_object.st_mode):
@@ -218,7 +334,7 @@ class FakeFileOpen:
         fakefile = FakeFileWrapper(
             file_object,
             file_path,
-            update=open_modes.can_write,
+            update=open_modes.can_write and can_write,
             read=open_modes.can_read,
             append=open_modes.append,
             delete_on_close=self._delete_on_close,
@@ -230,6 +346,7 @@ class FakeFileOpen:
             errors=errors,
             buffering=buffering,
             raw_io=self.raw_io,
+            opened_as_fd=opened_as_fd,
         )
         if filedes is not None:
             fakefile.filedes = filedes
@@ -238,7 +355,7 @@ class FakeFileOpen:
             assert open_files_list is not None
             open_files_list.append(fakefile)
         else:
-            fakefile.filedes = self.filesystem._add_open_file(fakefile)
+            fakefile.filedes = self.filesystem.add_open_file(fakefile)
         return fakefile
 
     @staticmethod
@@ -267,11 +384,19 @@ class FakeFileOpen:
         file_path: AnyStr,
         open_modes: _OpenModes,
         real_path: AnyString,
+        check_file_permission: bool,
     ) -> FakeFile:
         if file_object:
-            if not is_root() and (
-                (open_modes.can_read and not file_object.st_mode & PERM_READ)
-                or (open_modes.can_write and not file_object.st_mode & PERM_WRITE)
+            if (
+                check_file_permission
+                and not is_root()
+                and (
+                    (open_modes.can_read and not file_object.has_permission(PERM_READ))
+                    or (
+                        open_modes.can_write
+                        and not file_object.has_permission(PERM_WRITE)
+                    )
+                )
             ):
                 self.filesystem.raise_os_error(errno.EACCES, file_path)
             if open_modes.can_write:
@@ -304,16 +429,21 @@ class FakeFileOpen:
 
     def _handle_file_arg(
         self, file_: Union[AnyStr, int]
-    ) -> Tuple[Optional[FakeFile], Optional[AnyStr], Optional[int], Optional[AnyStr]]:
+    ) -> Tuple[
+        Optional[FakeFile], Optional[AnyStr], Optional[int], Optional[AnyStr], bool
+    ]:
         file_object = None
         if isinstance(file_, int):
             # opening a file descriptor
             filedes: int = file_
             wrapper = self.filesystem.get_open_file(filedes)
+            can_write = True
             if isinstance(wrapper, FakePipeWrapper):
-                return None, None, filedes, None
+                return None, None, filedes, None, can_write
             if isinstance(wrapper, FakeFileWrapper):
                 self._delete_on_close = wrapper.delete_on_close
+                can_write = wrapper.allow_update
+
             file_object = cast(
                 FakeFile, self.filesystem.get_open_file(filedes).get_object()
             )
@@ -324,9 +454,10 @@ class FakeFileOpen:
                 cast(AnyStr, path),  # pytype: disable=invalid-annotation
                 filedes,
                 cast(AnyStr, path),  # pytype: disable=invalid-annotation
+                can_write,
             )
 
-        # open a file file by path
+        # open a file by path
         file_path = cast(AnyStr, file_)  # pytype: disable=invalid-annotation
         if file_path == self.filesystem.dev_null.name:
             file_object = self.filesystem.dev_null
@@ -337,7 +468,7 @@ class FakeFileOpen:
                 file_object = self.filesystem.get_object_from_normpath(
                     real_path, check_read_perm=False
                 )
-        return file_object, file_path, None, real_path
+        return file_object, file_path, None, real_path, True
 
     def _handle_file_mode(
         self,
