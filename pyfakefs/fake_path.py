@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Faked ``os.path`` module replacement. See ``fake_filesystem`` for usage.
-"""
+"""Faked ``os.path`` module replacement. See ``fake_filesystem`` for usage."""
+
 import errno
 import os
 import sys
@@ -165,10 +165,19 @@ class FakePathModule:
 
     def isabs(self, path: AnyStr) -> bool:
         """Return True if path is an absolute pathname."""
+        empty = matching_string(path, "")
         if self.filesystem.is_windows_fs:
-            path = self.splitdrive(path)[1]
+            drive, path = self.splitdrive(path)
+        else:
+            drive = empty
         path = make_string_path(path)
-        return self.filesystem.starts_with_sep(path)
+        if not self.filesystem.starts_with_sep(path):
+            return False
+        if self.filesystem.is_windows_fs and sys.version_info >= (3, 13):
+            # from Python 3.13 on, a path under Windows starting with a single separator
+            # (e.g. not a drive and not an UNC path) is no more considered absolute
+            return drive != empty
+        return True
 
     def isdir(self, path: AnyStr) -> bool:
         """Determine if path identifies a directory."""
@@ -203,6 +212,14 @@ class FakePathModule:
             Implementation taken from ntpath and posixpath.
             """
             return self.filesystem.splitroot(path)
+
+    if sys.version_info >= (3, 13):
+
+        def isreserved(self, path):
+            if not self.filesystem.is_windows_fs:
+                raise AttributeError("module 'os' has no attribute 'isreserved'")
+
+            return self.filesystem.isreserved(path)
 
     def getmtime(self, path: AnyStr) -> float:
         """Returns the modification time of the fake file.
@@ -368,14 +385,12 @@ class FakePathModule:
     @overload
     def _join_real_path(
         self, path: str, rest: str, seen: Dict[str, Optional[str]]
-    ) -> Tuple[str, bool]:
-        ...
+    ) -> Tuple[str, bool]: ...
 
     @overload
     def _join_real_path(
         self, path: bytes, rest: bytes, seen: Dict[bytes, Optional[bytes]]
-    ) -> Tuple[bytes, bool]:
-        ...
+    ) -> Tuple[bytes, bool]: ...
 
     def _join_real_path(
         self, path: AnyStr, rest: AnyStr, seen: Dict[AnyStr, Optional[AnyStr]]

@@ -9,24 +9,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """
-Example module that is used for testing the functionality of
-:py:class`pyfakefs.mox_stubout.StubOutForTesting`.
+Provides functions for testing additional_skip_names functionality.
 """
 
-import datetime
-import math
 import os
+from pathlib import Path
 
 
-def check_if_exists(filepath):
-    return os.path.exists(filepath)
+def read_pathlib(file_name):
+    return (Path(__file__).parent / file_name).open("r").read()
 
 
-def fabs(x):
-    return math.fabs(x)
+def read_text_pathlib(file_name):
+    return (Path(__file__).parent / file_name).read_text()
 
 
-def tomorrow():
-    return datetime.date.today() + datetime.timedelta(days=1)
+def read_bytes_pathlib(file_name):
+    return (Path(__file__).parent / file_name).read_bytes()
+
+
+def read_open(file_name):
+    with open(os.path.join(os.path.dirname(__file__), file_name)) as f:
+        return f.read()

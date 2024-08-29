@@ -515,6 +515,20 @@ class FakeFilesystemUnitTest(TestCase):
         self.assertEqual(os.path.basename(path), new_dir.name)
         self.assertTrue(stat.S_IFDIR & new_dir.st_mode)
 
+    def test_create_dir_umask(self):
+        old_umask = self.filesystem.umask
+        self.filesystem.umask = 0o22
+        path = "foo/bar/baz"
+        self.filesystem.create_dir(path, perm_bits=0o777)
+        new_dir = self.filesystem.get_object(path)
+        self.assertEqual(stat.S_IFDIR | 0o755, new_dir.st_mode)
+
+        path = "foo/bar/boo"
+        self.filesystem.create_dir(path, perm_bits=0o777, apply_umask=False)
+        new_dir = self.filesystem.get_object(path)
+        self.assertEqual(stat.S_IFDIR | 0o777, new_dir.st_mode)
+        self.filesystem.umask = old_umask
+
     def test_create_directory_already_exists_error(self):
         path = "foo/bar/baz"
         self.filesystem.create_dir(path)
@@ -583,8 +597,9 @@ class FakeFilesystemUnitTest(TestCase):
         new_file = self.filesystem.get_object(path)
         self.assertEqual(os.path.basename(path), new_file.name)
         if IS_WIN:
-            self.assertEqual(1, new_file.st_uid)
-            self.assertEqual(1, new_file.st_gid)
+            fake_id = 0 if is_root() else 1
+            self.assertEqual(fake_id, new_file.st_uid)
+            self.assertEqual(fake_id, new_file.st_gid)
         else:
             self.assertEqual(os.getuid(), new_file.st_uid)
             self.assertEqual(os.getgid(), new_file.st_gid)
@@ -605,7 +620,7 @@ class FakeFilesystemUnitTest(TestCase):
         fake_open = fake_filesystem.FakeFileOpen(self.filesystem)
         path = "foo/bar/baz"
         self.filesystem.create_file(path, contents=None)
-        with fake_open(path) as f:
+        with fake_open(path, encoding="utf8") as f:
             self.assertEqual("", f.read())
 
     def test_create_file_with_incorrect_mode_type(self):
@@ -955,8 +970,12 @@ class FakePathModuleTest(TestCase):
         self.filesystem.is_windows_fs = True
         self.assertTrue(self.path.isabs("C:!foo"))
         self.assertTrue(self.path.isabs(b"C:!foo"))
-        self.assertTrue(self.path.isabs("!"))
-        self.assertTrue(self.path.isabs(b"!"))
+        if sys.version_info < (3, 13):
+            self.assertTrue(self.path.isabs("!"))
+            self.assertTrue(self.path.isabs(b"!"))
+        else:
+            self.assertFalse(self.path.isabs("!"))
+            self.assertFalse(self.path.isabs(b"!"))
 
     def test_relpath(self):
         path_foo = "!path!to!foo"
@@ -1247,6 +1266,22 @@ class FakePathModuleTest(TestCase):
         self.assertEqual(
             ("", "!!", "foo!!bar"), self.filesystem.splitroot("!!foo!!bar")
         )
+
+    @unittest.skipIf(sys.version_info < (3, 13), "Introduced in Python 3.13")
+    @unittest.skipIf(TestCase.is_windows, "Posix specific behavior")
+    def test_is_reserved_posix(self):
+        self.assertFalse(self.filesystem.isreserved("!dev"))
+        self.assertFalse(self.filesystem.isreserved("!"))
+        self.assertFalse(self.filesystem.isreserved("COM1"))
+        self.assertFalse(self.filesystem.isreserved("nul.txt"))
+
+    @unittest.skipIf(sys.version_info < (3, 13), "Introduced in Python 3.13")
+    @unittest.skipIf(not TestCase.is_windows, "Windows specific behavior")
+    def test_is_reserved_windows(self):
+        self.assertFalse(self.filesystem.isreserved("!dev"))
+        self.assertFalse(self.filesystem.isreserved("!"))
+        self.assertTrue(self.filesystem.isreserved("COM1"))
+        self.assertTrue(self.filesystem.isreserved("nul.txt"))
 
 
 class PathManipulationTestBase(TestCase):
@@ -1649,7 +1684,7 @@ class DiskSpaceTest(TestCase):
         self.fs.add_mount_point("!mount", total_size)
 
         def create_too_large_file():
-            with self.open("!mount!file", "w") as dest:
+            with self.open("!mount!file", "w", encoding="utf8") as dest:
                 dest.write("a" * (total_size + 1))
 
         with self.assertRaises(OSError):
@@ -1657,7 +1692,7 @@ class DiskSpaceTest(TestCase):
 
         self.assertEqual(0, self.fs.get_disk_usage("!mount").used)
 
-        with self.open("!mount!file", "w") as dest:
+        with self.open("!mount!file", "w", encoding="utf8") as dest:
             dest.write("a" * total_size)
 
         self.assertEqual(total_size, self.fs.get_disk_usage("!mount").used)
@@ -1882,50 +1917,50 @@ class DiskSpaceTest(TestCase):
         self.assertEqual(dest_file.contents, source_file.contents)
 
     def test_diskusage_after_open_write(self):
-        with self.open("bar.txt", "w") as f:
+        with self.open("bar.txt", "w", encoding="utf8") as f:
             f.write("a" * 60)
             f.flush()
         self.assertEqual(60, self.fs.get_disk_usage()[1])
 
     def test_disk_full_after_reopened(self):
-        with self.open("bar.txt", "w") as f:
+        with self.open("bar.txt", "w", encoding="utf8") as f:
             f.write("a" * 60)
-        with self.open("bar.txt") as f:
+        with self.open("bar.txt", encoding="utf8") as f:
             self.assertEqual("a" * 60, f.read())
         with self.raises_os_error(errno.ENOSPC):
-            with self.open("bar.txt", "w") as f:
+            with self.open("bar.txt", "w", encoding="utf8") as f:
                 f.write("b" * 110)
                 with self.raises_os_error(errno.ENOSPC):
                     f.flush()
-        with self.open("bar.txt") as f:
+        with self.open("bar.txt", encoding="utf8") as f:
             self.assertEqual("", f.read())
 
     def test_disk_full_append(self):
         file_path = "bar.txt"
-        with self.open(file_path, "w") as f:
+        with self.open(file_path, "w", encoding="utf8") as f:
             f.write("a" * 60)
-        with self.open(file_path) as f:
+        with self.open(file_path, encoding="utf8") as f:
             self.assertEqual("a" * 60, f.read())
         with self.raises_os_error(errno.ENOSPC):
-            with self.open(file_path, "a") as f:
+            with self.open(file_path, "a", encoding="utf8") as f:
                 f.write("b" * 41)
                 with self.raises_os_error(errno.ENOSPC):
                     f.flush()
-        with self.open("bar.txt") as f:
+        with self.open("bar.txt", encoding="utf8") as f:
             self.assertEqual(f.read(), "a" * 60)
 
     def test_disk_full_after_reopened_rplus_seek(self):
-        with self.open("bar.txt", "w") as f:
+        with self.open("bar.txt", "w", encoding="utf8") as f:
             f.write("a" * 60)
-        with self.open("bar.txt") as f:
+        with self.open("bar.txt", encoding="utf8") as f:
             self.assertEqual(f.read(), "a" * 60)
         with self.raises_os_error(errno.ENOSPC):
-            with self.open("bar.txt", "r+") as f:
+            with self.open("bar.txt", "r+", encoding="utf8") as f:
                 f.seek(50)
                 f.write("b" * 60)
                 with self.raises_os_error(errno.ENOSPC):
                     f.flush()
-        with self.open("bar.txt") as f:
+        with self.open("bar.txt", encoding="utf8") as f:
             self.assertEqual(f.read(), "a" * 60)
 
 
@@ -2050,20 +2085,23 @@ class RealFileSystemAccessTest(RealFsTestCase):
 
     @contextlib.contextmanager
     def create_real_paths(self):
-        real_dir_root = os.path.join(tempfile.gettempdir(), "root")
+        temp_directory = tempfile.mkdtemp()
+        real_dir_root = os.path.join(temp_directory, "root")
         try:
             for dir_name in ("foo", "bar"):
                 real_dir = os.path.join(real_dir_root, dir_name)
                 os.makedirs(real_dir, exist_ok=True)
-                with open(os.path.join(real_dir, "test.txt"), "w") as f:
+                with open(
+                    os.path.join(real_dir, "test.txt"), "w", encoding="utf8"
+                ) as f:
                     f.write("test")
                 sub_dir = os.path.join(real_dir, "sub")
                 os.makedirs(sub_dir, exist_ok=True)
-                with open(os.path.join(sub_dir, "sub.txt"), "w") as f:
+                with open(os.path.join(sub_dir, "sub.txt"), "w", encoding="utf8") as f:
                     f.write("sub")
             yield real_dir_root
         finally:
-            shutil.rmtree(real_dir_root, ignore_errors=True)
+            shutil.rmtree(temp_directory, ignore_errors=True)
 
     def test_existing_fake_directory_is_merged_lazily(self):
         self.filesystem.create_file(os.path.join("/", "root", "foo", "test1.txt"))
@@ -2120,7 +2158,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
                 self.filesystem.add_real_directory(root_dir, target_path="/root/")
 
     def test_symlink_is_merged(self):
-        self.skip_if_symlink_not_supported(force_real_fs=True)
+        self.skip_if_symlink_not_supported()
         self.filesystem.create_dir(os.path.join("/", "root", "foo"))
         with self.create_real_paths() as root_dir:
             link_path = os.path.join(root_dir, "link.txt")
@@ -2203,7 +2241,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         # regression test for #470
         real_file_path = os.path.abspath(__file__)
         self.filesystem.add_real_file(real_file_path, read_only=False)
-        with self.fake_open(real_file_path, "w") as f:
+        with self.fake_open(real_file_path, "w", encoding="utf8") as f:
             f.write("foo")
 
         with self.fake_open(real_file_path, "rb") as f:
@@ -2254,14 +2292,23 @@ class RealFileSystemAccessTest(RealFsTestCase):
         for link in symlinks:
             os.symlink(link[0], link[1])
 
-        yield
+        try:
+            yield
+        finally:
+            for link in symlinks:
+                os.unlink(link[1])
 
-        for link in symlinks:
-            os.unlink(link[1])
+    @staticmethod
+    def _setup_temp_directory():
+        real_directory = tempfile.mkdtemp()
+        os.mkdir(os.path.join(real_directory, "fixtures"))
+        with open(os.path.join(real_directory, "all_tests.py"), "w"):
+            pass
+        return real_directory
 
     def test_add_existing_real_directory_symlink(self):
         fake_open = fake_filesystem.FakeFileOpen(self.filesystem)
-        real_directory = os.path.join(self.root_path, "pyfakefs", "tests")
+        real_directory = self._setup_temp_directory()
         symlinks = [
             (
                 "..",
@@ -2289,7 +2336,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
 
         self.filesystem.create_file("/etc/something")
 
-        with fake_open("/etc/something", "w") as f:
+        with fake_open("/etc/something", "w", encoding="utf8") as f:
             f.write("good morning")
 
         try:
@@ -2307,9 +2354,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_dir_relative",
                 )
             )
@@ -2317,9 +2362,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_dir_relative/all_tests.py",
                 )
             )
@@ -2327,9 +2370,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_file_relative",
                 )
             )
@@ -2339,9 +2380,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_dir_absolute",
                 )
             )
@@ -2349,9 +2388,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_dir_absolute/all_tests.py",
                 )
             )
@@ -2359,9 +2396,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_file_absolute",
                 )
             )
@@ -2371,9 +2406,7 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(
             self.filesystem.exists(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_file_absolute_outside",
                 )
             )
@@ -2381,18 +2414,17 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertEqual(
             fake_open(
                 os.path.join(
-                    self.root_path,
-                    "pyfakefs",
-                    "tests",
+                    real_directory,
                     "fixtures/symlink_file_absolute_outside",
-                )
+                ),
+                encoding="utf8",
             ).read(),
             "good morning",
         )
 
     def test_add_existing_real_directory_symlink_target_path(self):
-        self.skip_if_symlink_not_supported(force_real_fs=True)
-        real_directory = os.path.join(self.root_path, "pyfakefs", "tests")
+        self.skip_if_symlink_not_supported()
+        real_directory = self._setup_temp_directory()
         symlinks = [
             (
                 "..",
@@ -2416,8 +2448,8 @@ class RealFileSystemAccessTest(RealFsTestCase):
         self.assertTrue(self.filesystem.exists("/path/fixtures/symlink_file_relative"))
 
     def test_add_existing_real_directory_symlink_lazy_read(self):
-        self.skip_if_symlink_not_supported(force_real_fs=True)
-        real_directory = os.path.join(self.root_path, "pyfakefs", "tests")
+        self.skip_if_symlink_not_supported()
+        real_directory = self._setup_temp_directory()
         symlinks = [
             (
                 "..",
@@ -2585,14 +2617,14 @@ class FileSideEffectTests(TestCase):
     def test_side_effect_called(self):
         fake_open = fake_filesystem.FakeFileOpen(self.filesystem)
         self.side_effect_called = False
-        with fake_open("/a/b/file_one", "w") as handle:
+        with fake_open("/a/b/file_one", "w", encoding="utf8") as handle:
             handle.write("foo")
         self.assertTrue(self.side_effect_called)
 
     def test_side_effect_file_object(self):
         fake_open = fake_filesystem.FakeFileOpen(self.filesystem)
         self.side_effect_called = False
-        with fake_open("/a/b/file_one", "w") as handle:
+        with fake_open("/a/b/file_one", "w", encoding="utf8") as handle:
             handle.write("foo")
         self.assertEqual(self.side_effect_file_object_content, "foo")
 

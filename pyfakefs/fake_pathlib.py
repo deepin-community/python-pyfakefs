@@ -28,9 +28,11 @@ Note: as the implementation is based on FakeFilesystem, all faked classes
 (including PurePosixPath, PosixPath, PureWindowsPath and WindowsPath)
 get the properties of the underlying fake filesystem.
 """
+
 import errno
 import fnmatch
 import functools
+import glob
 import inspect
 import ntpath
 import os
@@ -38,14 +40,14 @@ import pathlib
 import posixpath
 import re
 import sys
+import warnings
 from pathlib import PurePath
-from typing import Callable
+from typing import Callable, List
 from urllib.parse import quote_from_bytes as urlquote_from_bytes
 
 from pyfakefs import fake_scandir
-from pyfakefs.extra_packages import use_scandir
 from pyfakefs.fake_filesystem import FakeFilesystem
-from pyfakefs.fake_open import FakeFileOpen
+from pyfakefs.fake_open import fake_open
 from pyfakefs.fake_os import FakeOsModule, use_original_os
 from pyfakefs.helpers import IS_PYPY
 
@@ -55,15 +57,40 @@ def init_module(filesystem):
     # pylint: disable=protected-access
     FakePath.filesystem = filesystem
     if sys.version_info < (3, 12):
-        FakePathlibModule.PureWindowsPath._flavour = _FakeWindowsFlavour(filesystem)
-        FakePathlibModule.PurePosixPath._flavour = _FakePosixFlavour(filesystem)
+        FakePathlibModule.WindowsPath._flavour = _FakeWindowsFlavour(filesystem)
+        FakePathlibModule.PosixPath._flavour = _FakePosixFlavour(filesystem)
+
+        # Pure POSIX path separators must be filesystem-independent.
+        fake_pure_posix_flavour = _FakePosixFlavour(filesystem)
+        fake_pure_posix_flavour.sep = "/"
+        fake_pure_posix_flavour.altsep = None
+        FakePathlibModule.PurePosixPath._flavour = fake_pure_posix_flavour
+
+        # Pure Windows path separators must be filesystem-independent.
+        fake_pure_nt_flavour = _FakePosixFlavour(filesystem)
+        fake_pure_nt_flavour.sep = "\\"
+        fake_pure_nt_flavour.altsep = "/"
+        FakePathlibModule.PureWindowsPath._flavour = fake_pure_nt_flavour
     else:
-        # in Python 3.12, the flavour is no longer an own class,
+        # in Python > 3.11, the flavour is no longer a separate class,
         # but points to the os-specific path module (posixpath/ntpath)
         fake_os = FakeOsModule(filesystem)
-        fake_path = fake_os.path
-        FakePathlibModule.PureWindowsPath._flavour = fake_path
-        FakePathlibModule.PurePosixPath._flavour = fake_path
+        parser_name = "_flavour" if sys.version_info < (3, 13) else "parser"
+
+        setattr(FakePathlibModule.PosixPath, parser_name, fake_os.path)
+        setattr(FakePathlibModule.WindowsPath, parser_name, fake_os.path)
+
+        # Pure POSIX path separators must be filesystem independent.
+        fake_pure_posix_os = FakeOsModule(filesystem)
+        fake_pure_posix_os.path.sep = "/"
+        fake_pure_posix_os.path.altsep = None
+        setattr(FakePathlibModule.PurePosixPath, parser_name, fake_pure_posix_os.path)
+
+        # Pure Windows path separators must be filesystem independent.
+        fake_pure_nt_os = FakeOsModule(filesystem)
+        fake_pure_nt_os.path.sep = "\\"
+        fake_pure_nt_os.path.altsep = "/"
+        setattr(FakePathlibModule.PureWindowsPath, parser_name, fake_pure_nt_os.path)
 
 
 def _wrap_strfunc(strfunc):
@@ -108,9 +135,7 @@ class _FakeAccessor(accessor):  # type: ignore[valid-type, misc]
     )
 
     listdir = _wrap_strfunc(FakeFilesystem.listdir)
-
-    if use_scandir:
-        scandir = _wrap_strfunc(fake_scandir.scandir)
+    scandir = _wrap_strfunc(fake_scandir.scandir)
 
     if hasattr(os, "lchmod"):
         lchmod = _wrap_strfunc(
@@ -206,7 +231,7 @@ if sys.version_info < (3, 12):
             self.sep = filesystem.path_separator
             self.altsep = filesystem.alternative_path_separator
             self.has_drv = filesystem.is_windows_fs
-            super(_FakeFlavour, self).__init__()
+            super().__init__()
 
         @staticmethod
         def _split_extended_path(path, ext_prefix=ext_namespace_prefix):
@@ -417,7 +442,7 @@ if sys.version_info < (3, 12):
             if len(drive) == 2 and drive[1] == ":":
                 # It's a path on a local drive => 'file:///c:/a/b'
                 rest = path.as_posix()[2:].lstrip("/")
-                return "file:///%s/%s" % (
+                return "file:///{}/{}".format(
                     drive,
                     urlquote_from_bytes(rest.encode("utf-8")),
                 )
@@ -511,6 +536,7 @@ class FakePath(pathlib.Path):
 
     # the underlying fake filesystem
     filesystem = None
+    skip_names: List[str] = []
 
     def __new__(cls, *args, **kwargs):
         """Creates the correct subclass based on OS."""
@@ -556,6 +582,15 @@ class FakePath(pathlib.Path):
             # only needed until Python 3.8
             self._closed = False
 
+    if sys.version_info >= (3, 13):
+
+        def _glob_selector(self, parts, case_sensitive, recurse_symlinks):
+            # make sure we get the patched version of the globber
+            self._globber = glob._StringGlobber  # type: ignore[module-attr]
+            return super()._glob_selector(  # type: ignore[attribute-error]
+                parts, case_sensitive, recurse_symlinks
+            )
+
     def _path(self):
         """Returns the underlying path string as used by the fake
         filesystem.
@@ -583,15 +618,8 @@ class FakePath(pathlib.Path):
             Raises:
                 OSError: if the path doesn't exist (strict=True)
             """
-            if sys.version_info >= (3, 6):
-                if strict is None:
-                    strict = False
-            else:
-                if strict is not None:
-                    raise TypeError(
-                        "resolve() got an unexpected keyword argument 'strict'"
-                    )
-                strict = True
+            if strict is None:
+                strict = False
             self._raise_on_closed()
             path = self._flavour.resolve(
                 self, strict=strict
@@ -610,8 +638,15 @@ class FakePath(pathlib.Path):
                 or permission is denied.
         """
         self._raise_on_closed()
-        return FakeFileOpen(self.filesystem)(
-            self._path(), mode, buffering, encoding, errors, newline
+        return fake_open(
+            self.filesystem,
+            self.skip_names,
+            self._path(),
+            mode,
+            buffering,
+            encoding,
+            errors,
+            newline,
         )
 
     def read_bytes(self):
@@ -621,17 +656,25 @@ class FakePath(pathlib.Path):
             OSError: if the target object is a directory, the path is
                 invalid or permission is denied.
         """
-        with FakeFileOpen(self.filesystem)(
-            self._path(), mode="rb"
-        ) as f:  # pytype: disable=attribute-error
+        with fake_open(
+            self.filesystem,
+            self.skip_names,
+            self._path(),
+            mode="rb",
+        ) as f:
             return f.read()
 
     def read_text(self, encoding=None, errors=None):
         """
         Open the fake file in text mode, read it, and close the file.
         """
-        with FakeFileOpen(self.filesystem)(  # pytype: disable=attribute-error
-            self._path(), mode="r", encoding=encoding, errors=errors
+        with fake_open(
+            self.filesystem,
+            self.skip_names,
+            self._path(),
+            mode="r",
+            encoding=encoding,
+            errors=errors,
         ) as f:
             return f.read()
 
@@ -645,9 +688,12 @@ class FakePath(pathlib.Path):
         """
         # type-check for the buffer interface before truncating the file
         view = memoryview(data)
-        with FakeFileOpen(self.filesystem)(
-            self._path(), mode="wb"
-        ) as f:  # pytype: disable=attribute-error
+        with fake_open(
+            self.filesystem,
+            self.skip_names,
+            self._path(),
+            mode="wb",
+        ) as f:
             return f.write(view)
 
     def write_text(self, data, encoding=None, errors=None, newline=None):
@@ -672,7 +718,9 @@ class FakePath(pathlib.Path):
             raise TypeError(
                 "write_text() got an unexpected " "keyword argument 'newline'"
             )
-        with FakeFileOpen(self.filesystem)(  # pytype: disable=attribute-error
+        with fake_open(
+            self.filesystem,
+            self.skip_names,
             self._path(),
             mode="w",
             encoding=encoding,
@@ -748,7 +796,7 @@ class FakePath(pathlib.Path):
             else:
                 self.filesystem.raise_os_error(errno.EEXIST, self._path())
         else:
-            fake_file = self.open("w")
+            fake_file = self.open("w", encoding="utf8")
             fake_file.close()
             self.chmod(mode)
 
@@ -763,19 +811,26 @@ class FakePath(pathlib.Path):
             return os.path.isabs(self._path())
 
         def is_reserved(self):
-            if not self.filesystem.is_windows_fs or not self._tail:
+            if sys.version_info >= (3, 13):
+                warnings.warn(
+                    "pathlib.PurePath.is_reserved() is deprecated and scheduled "
+                    "for removal in Python 3.15. Use os.path.isreserved() to detect "
+                    "reserved paths on Windows.",
+                    DeprecationWarning,
+                )
+            if not self.filesystem.is_windows_fs:
                 return False
-            if self._tail[0].startswith("\\\\"):
-                # UNC paths are never reserved.
-                return False
-            name = self._tail[-1].partition(".")[0].partition(":")[0].rstrip(" ")
-            return name.upper() in pathlib._WIN_RESERVED_NAMES
+            if sys.version_info < (3, 13):
+                if not self._tail or self._tail[0].startswith("\\\\"):
+                    # UNC paths are never reserved.
+                    return False
+                name = self._tail[-1].partition(".")[0].partition(":")[0].rstrip(" ")
+                return name.upper() in pathlib._WIN_RESERVED_NAMES
+            return self.filesystem.isreserved(self._path())
 
 
 class FakePathlibModule:
     """Uses FakeFilesystem to provide a fake pathlib module replacement.
-    Can be used to replace both the standard `pathlib` module and the
-    `pathlib2` package available on PyPi.
 
     You need a fake_filesystem to use this:
     `filesystem = fake_filesystem.FakeFilesystem()`
@@ -797,11 +852,15 @@ class FakePathlibModule:
         paths"""
 
         __slots__ = ()
+        if sys.version_info >= (3, 13):
+            parser = posixpath
 
     class PureWindowsPath(PurePath):
         """A subclass of PurePath, that represents Windows filesystem paths"""
 
         __slots__ = ()
+        if sys.version_info >= (3, 13):
+            parser = ntpath
 
     class WindowsPath(FakePath, PureWindowsPath):
         """A subclass of Path and PureWindowsPath that represents
@@ -860,6 +919,15 @@ class FakePathlibPathModule:
         if self.fake_pathlib is None:
             self.__class__.fake_pathlib = FakePathlibModule(filesystem)
 
+    @property
+    def skip_names(self):
+        return []  # not used, here to allow a setter
+
+    @skip_names.setter
+    def skip_names(self, value):
+        # this is set from the patcher and passed to the fake Path class
+        self.fake_pathlib.Path.skip_names = value
+
     def __call__(self, *args, **kwargs):
         return self.fake_pathlib.Path(*args, **kwargs)
 
@@ -884,8 +952,10 @@ class RealPath(pathlib.Path):
             if os.name == "nt"
             else pathlib._PosixFlavour()  # type:ignore
         )  # type:ignore
-    else:
+    elif sys.version_info < (3, 13):
         _flavour = ntpath if os.name == "nt" else posixpath
+    else:
+        parser = ntpath if os.name == "nt" else posixpath
 
     def __new__(cls, *args, **kwargs):
         """Creates the correct subclass based on OS."""

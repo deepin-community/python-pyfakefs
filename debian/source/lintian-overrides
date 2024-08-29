@@ -1,0 +1,4 @@
+# Import is conditional on the version of the Python interpreter
+python-pyfakefs source: uses-deprecated-python-stdlib distutils (deprecated in Python 3.10, removed in Python 3.12) *pyfakefs/tests/fake_filesystem_unittest_test.py:*
+# False positive, actually imports the uuid module
+python-pyfakefs source: uses-deprecated-python-stdlib uu (deprecated in Python 3.11, removed in Python 3.13) *pyfakefs/fake_os.py:*

@@ -2,19 +2,19 @@ Source: python-pyfakefs
 Section: python
 Priority: optional
 Maintainer: Debian Python Team <team+python@tracker.debian.org>
-Uploaders:
- Ondřej Nový <onovy@debian.org>,
+Uploaders: Jeroen Ploemen <jcfp@debian.org>
 Build-Depends:
  debhelper-compat (= 13),
  dh-sequence-python3,
  pybuild-plugin-pyproject,
  python3-all,
  python3-setuptools,
+ python3-pandas <!nocheck>,
  python3-pytest <!nocheck>
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Vcs-Browser: https://salsa.debian.org/python-team/packages/python-pyfakefs
 Vcs-Git: https://salsa.debian.org/python-team/packages/python-pyfakefs.git
-Homepage: http://pyfakefs.org/
+Homepage: https://github.com/pytest-dev/pyfakefs
 Testsuite: autopkgtest-pkg-pybuild
 Rules-Requires-Root: no
 
